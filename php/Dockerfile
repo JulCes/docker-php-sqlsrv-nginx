@@ -1,57 +1,33 @@
-FROM php:7.1-fpm
+FROM php:8.2-fpm-bullseye
 
-# Get repository and install wget and vim
-RUN apt-get update && apt-get install -y \
-    wget \
-    apt-utils \
-    gnupg \
-    software-properties-common \
-    apt-transport-https \
-    libxml2-dev \
-    unixodbc-dev
+ENV ACCEPT_EULA=Y
 
-# necessário para sqlsrv
-RUN wget -qO - https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
-    && wget -qO - https://packages.microsoft.com/config/debian/9/prod.list \
-        > /etc/apt/sources.list.d/mssql-release.list
-
-# Install PHP extensions deps
+# Install prerequisites required for tools and extensions installed later on.
 RUN apt-get update \
-&& apt-get install --no-install-recommends -y \
-libfreetype6-dev \
-libjpeg62-turbo-dev \
-libmcrypt-dev \
-libpng-dev \
-zlib1g-dev \
-libicu-dev \
-g++ \
-unixodbc-dev \
-&& ACCEPT_EULA=Y apt-get install --no-install-recommends -y msodbcsql17 mssql-tools \
-&& apt-get install --no-install-recommends -y libxml2-dev \
-libaio-dev \
-libmemcached-dev \
-freetds-dev \
-libssl-dev \
-openssl \
-supervisor
+    && apt-get install -y apt-transport-https gnupg2 libpng-dev libzip-dev unzip \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install PHP extensions
-RUN pecl install sqlsrv pdo_sqlsrv
+# Install prerequisites for the sqlsrv and pdo_sqlsrv PHP extensions.
+# Some packages are pinned with lower priority to prevent build issues due to package conflicts.
+# Link: https://github.com/microsoft/linux-package-repositories/issues/39
+RUN curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
+    && curl https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list \
+    && echo "Package: unixodbc\nPin: origin \"packages.microsoft.com\"\nPin-Priority: 100\n" >> /etc/apt/preferences.d/microsoft \
+    && echo "Package: unixodbc-dev\nPin: origin \"packages.microsoft.com\"\nPin-Priority: 100\n" >> /etc/apt/preferences.d/microsoft \
+    && echo "Package: libodbc1:amd64\nPin: origin \"packages.microsoft.com\"\nPin-Priority: 100\n" >> /etc/apt/preferences.d/microsoft \
+    && echo "Package: odbcinst\nPin: origin \"packages.microsoft.com\"\nPin-Priority: 100\n" >> /etc/apt/preferences.d/microsoft \
+    && echo "Package: odbcinst1debian2:amd64\nPin: origin \"packages.microsoft.com\"\nPin-Priority: 100\n" >> /etc/apt/preferences.d/microsoft \
+    && apt-get update \
+    && apt-get install -y msodbcsql18 mssql-tools18 unixodbc-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# PRA VER SE TEM ALGUM BUG NO PHP
-# RUN php -i | grep "Configure Command"
+# Retrieve the script used to install PHP extensions from the source container.
+COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/bin/install-php-extensions
 
-RUN docker-php-ext-install \
-iconv \
-mcrypt \
-sockets \
-pdo \
-pdo_mysql \
-&& docker-php-ext-enable \
-sqlsrv \
-pdo_sqlsrv
+# Install required PHP extensions and all their prerequisites available via apt.
+RUN chmod uga+x /usr/bin/install-php-extensions \
+    && sync \
+    && install-php-extensions bcmath ds exif gd intl opcache pcntl pdo_sqlsrv redis sqlsrv zip
 
-# Clean repository
-RUN apt-get autoremove -y && \
-apt-get clean && \
-rm -rf /var/lib/apt/lists/*
+# Setting the work directory.
+WORKDIR /var/www
